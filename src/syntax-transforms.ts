@@ -73,7 +73,23 @@ export function collectEsmCjsPatches(
   const mixedExports = hasDefaultExport && hasNamedExport;
   const defaultExportTarget = options.exportTarget ?? "module.exports";
   // collected during the walk, prepended at the bottom of this fn
-  const hoistedFunctionExports: string[] = [];
+  const hoistedFunctionExports: Array<{ exported: string; local: string }> = [];
+  // a bundled module exports once at the end of the file rather than at each
+  // declaration, so `export { buildLineIndex }` needs the same hoisting
+  // `export function` already gets. without it a module in a cycle publishes
+  // nothing until after it has imported the module that is waiting on it,
+  // and the waiting side captures undefined. #56
+  const functionDeclarations = new Set<string>();
+  for (const node of ast.body) {
+    const decl =
+      node.type === "FunctionDeclaration"
+        ? node
+        : node.type === "ExportNamedDeclaration" &&
+            node.declaration?.type === "FunctionDeclaration"
+          ? node.declaration
+          : null;
+    if (decl?.id) functionDeclarations.add(decl.id.name);
+  }
 
   for (const node of ast.body) {
     if (node.type === "ImportDeclaration") {
@@ -170,7 +186,7 @@ export function collectEsmCjsPatches(
           // before the body works, which fixes circular ESM (typebox's
           // instantiate.mjs <-> awaited/instantiate.mjs). #56
           patches.push([node.start, decl.start, ""]);
-          hoistedFunctionExports.push(name);
+          hoistedFunctionExports.push({ exported: name, local: name });
         } else if (decl.type === "ClassDeclaration") {
           const name = decl.id.name;
           // classes are TDZ, can't assign before the decl. keep trailing.
@@ -237,10 +253,27 @@ export function collectEsmCjsPatches(
         }
         patches.push([node.start, node.end, lines.join(";\n") + ";"]);
       } else {
-        const lines = node.specifiers.map(
-          (s: any) => `exports.${s.exported.name} = ${s.local.name}`,
-        );
-        patches.push([node.start, node.end, lines.join(";\n") + ";"]);
+        const lines: string[] = [];
+        for (const spec of node.specifiers) {
+          const exported = spec.exported.name;
+          const local = spec.local.name;
+          // `default` stays where it is: a module that also assigns
+          // module.exports would clobber a hoisted one.
+          if (
+            exported !== undefined &&
+            exported !== "default" &&
+            functionDeclarations.has(local)
+          ) {
+            hoistedFunctionExports.push({ exported, local });
+            continue;
+          }
+          lines.push(`exports.${exported} = ${local}`);
+        }
+        patches.push([
+          node.start,
+          node.end,
+          lines.length > 0 ? lines.join(";\n") + ";" : "",
+        ]);
       }
     } else if (node.type === "ExportAllDeclaration") {
       const src = node.source.value;
@@ -261,13 +294,15 @@ export function collectEsmCjsPatches(
     }
   }
 
-  // hoist exports.X = X for every `export function X` so circular consumers
-  // see populated exports during a partial load. function decls are
-  // value-hoisted, classes/let/const arent (TDZ) so they stay trailing. #56
+  // hoist exports.X = X for every function declaration a named export
+  // resolves to, whether it was written `export function X` or collected into
+  // a trailing `export { X }`, so circular consumers see populated exports
+  // during a partial load. function decls are value-hoisted, classes/let/const
+  // arent (TDZ) so they stay trailing. #56
   if (hoistedFunctionExports.length > 0) {
     const prefix =
       hoistedFunctionExports
-        .map((n) => `exports.${n} = ${n};`)
+        .map(({ exported, local }) => `exports.${exported} = ${local};`)
         .join("\n") + "\n";
     patches.push([0, 0, prefix]);
   }
