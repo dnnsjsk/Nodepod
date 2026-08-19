@@ -2507,6 +2507,14 @@ export class ScriptEngine {
               }
             }
           }
+          if (url !== undefined) {
+            const loopback = loopbackTarget(url);
+            if (loopback !== null) {
+              return dispatchLoopback(loopback, input, init).then(
+                (answer) => answer ?? origFetch(input, init),
+              );
+            }
+          }
           return origFetch(input, init);
         };
         return doFetch().finally(() => handle.close());
@@ -3256,3 +3264,77 @@ export type {
   EngineConfig,
 } from "./engine-types";
 export default ScriptEngine;
+
+/**
+ * A server inside a pod listens on a port that means nothing to the network,
+ * so a loopback URL naming one has to be answered by the registry that holds
+ * it. `http.request` already does this; `fetch` did not, and the difference
+ * is not cosmetic: a process fetching its own port reached past the pod to
+ * whatever the machine hosting the browser happened to be running there, and
+ * read the answer as its own. Divine renders a page by fetching its dev
+ * server, so a developer with anything on that port saw someone else's
+ * project on the board.
+ */
+export function loopbackTarget(url: string): URL | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  const host = parsed.hostname.replace(/^\[|\]$/g, "");
+  const loopback =
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "0.0.0.0" ||
+    host === "::1" ||
+    host === "::";
+  return loopback ? parsed : null;
+}
+
+export async function dispatchLoopback(
+  target: URL,
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response | null> {
+  const port =
+    Number(target.port) || (target.protocol === "https:" ? 443 : 80);
+  const httpMod = await import("./polyfills/http");
+  const server = httpMod.getServer(port);
+  /* Nothing of the pod's is on that port, so the network is the right
+     answer after all. */
+  if (!server) return null;
+  const request = new Request(input as RequestInfo, init);
+  const headers: Record<string, string> = {};
+  request.headers.forEach((value, name) => {
+    headers[name] = value;
+  });
+  const { Buffer } = await import("./polyfills/buffer");
+  const body =
+    request.method === "GET" || request.method === "HEAD"
+      ? undefined
+      : Buffer.from(await request.arrayBuffer());
+  const result = await server.dispatchRequest(
+    request.method,
+    `${target.pathname}${target.search}`,
+    headers,
+    body,
+  );
+  /* Copied into a buffer of its own: a body that came back over shared
+     memory cannot be handed to Response as it is. */
+  let payload: BodyInit;
+  if (typeof result.body === "string") {
+    payload = result.body;
+  } else {
+    const view = new Uint8Array(result.body as unknown as ArrayBufferLike);
+    const copy = new Uint8Array(view.byteLength);
+    copy.set(view);
+    payload = copy;
+  }
+  return new Response(payload, {
+    headers: result.headers as Record<string, string>,
+    status: result.statusCode,
+    statusText: result.statusMessage,
+  });
+}
