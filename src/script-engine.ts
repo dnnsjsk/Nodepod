@@ -1334,7 +1334,7 @@ function buildResolver(
 ): ResolverFn {
   // Shared across all resolvers — avoids re-resolving the same paths/manifests per module
   // Use bounded LRU when a memory handler is available, else plain Map
-  const resolveCache: Map<string, string | null> =
+  const resolveCache: Map<string, string> =
     (cache as any).__resolveCache ??
     ((cache as any).__resolveCache = opts.handler
       ? new _LRUCache<string, string | null>(
@@ -1465,17 +1465,13 @@ function buildResolver(
     }
 
     const cacheKey = `${fromDir}|${id}`;
+    // only what was found is remembered. a volume grows while the program
+    // that reads it is running — packages are installed and materialized
+    // lazily — so a miss says nothing about the next attempt, and Node
+    // re-walks for exactly that reason. caching one made a single transient
+    // miss permanent for the life of the engine.
     const cached = resolveCache.get(cacheKey);
-    if (cached !== undefined) {
-      if (cached === null) {
-        const e = new Error(`Cannot find module '${id}'`) as Error & {
-          code: string;
-        };
-        e.code = "MODULE_NOT_FOUND";
-        throw e;
-      }
-      return cached;
-    }
+    if (cached !== undefined) return cached;
 
     const tryFile = (base: string): string | null => {
       if (vol.existsSync(base)) {
@@ -1514,7 +1510,6 @@ function buildResolver(
         return found;
       }
 
-      resolveCache.set(cacheKey, null);
       const e = new Error(
         `Cannot find module '${id}' from '${fromDir}'`,
       ) as Error & { code: string };
@@ -1684,7 +1679,6 @@ function buildResolver(
       }
     }
 
-    resolveCache.set(cacheKey, null);
     const e = new Error(
       `Cannot find module '${id}' from '${fromDir}'`,
     ) as Error & { code: string };
