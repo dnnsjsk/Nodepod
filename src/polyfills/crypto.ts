@@ -331,12 +331,18 @@ export function scryptSync(
   const N = opts?.N ?? 16384;
   const r = opts?.r ?? 8;
   const p = opts?.p ?? 1;
+  // @noble/hashes merges this object over its own defaults, so passing an
+  // absent maxmem through as undefined overwrites the default and then fails
+  // noble's own validation with "positive integer expected, got undefined".
+  // every scryptSync() call that omits opts hit that. 32 MiB is Node's
+  // documented default, which 128 * N * r stays under for Node's own N/r.
+  const maxmem = opts?.maxmem ?? 32 * 1024 * 1024;
   const out = nobleScrypt(pw, saltBytes, {
     N,
     r,
     p,
     dkLen: keyLen,
-    maxmem: opts?.maxmem,
+    maxmem,
   });
   return Buffer.from(out);
 }

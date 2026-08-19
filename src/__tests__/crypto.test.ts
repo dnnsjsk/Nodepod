@@ -136,6 +136,22 @@ describe("crypto API fidelity", () => {
     expect(buf.subarray(4).some((b) => b !== 0)).toBe(true);
   });
 
+  // opts is optional, and passing its absent maxmem straight through made
+  // @noble/hashes overwrite its own default with undefined and then reject it
+  it("scryptSync with no options matches Node's defaults", () => {
+    expect(scryptSync("password", "salt", 32).toString("hex")).toBe(
+      "745731af4484f323968969eda289aeee005b5903ac561e64a5aca121797bf773",
+    );
+  });
+
+  it("scryptSync with cost options but no maxmem matches Node", () => {
+    expect(
+      scryptSync("password", "NaCl", 16, { N: 16384, r: 8, p: 1 }).toString(
+        "hex",
+      ),
+    ).toBe("a8430d7e581f9ca03c952df506ac66c7");
+  });
+
   it("scryptSync matches Node vector (password/NaCl, N=1024,r=8,p=16)", () => {
     expect(
       scryptSync("password", "NaCl", 64, {
