@@ -954,6 +954,49 @@ function onPortMessage(event, mp) {
 //   5. iframe navigation via pathClaims, or recovery after SW update wiped state
 // everything else passes through untouched — no synthetic errors on misses.
 
+// A pod serves more than one port, and a page on one of them may ask another
+// for something — a dashboard rendering a page out of the dev server beside
+// it, a worker fetching an API. On a machine that is one server calling
+// another and it simply works. Here each port is an origin of its own, and a
+// service worker only sees the origin it was registered for, so such a
+// request left the pod entirely and was answered by whatever the machine
+// running the browser happened to have on that port, or by nothing.
+//
+// The hostname carries the instance and the port, which is what makes a
+// sibling recognisable: same scheme, same host port, same domain beneath, and
+// the same instance as this registration is bound to.
+function siblingPreviewPort(url) {
+  if (!originPod) return null;
+  if (url.origin === self.location.origin) return null;
+  if (url.protocol !== self.location.protocol) return null;
+  if (url.port !== self.location.port) return null;
+  const asked = /^([^.]+)-(\d+)\.(.+)$/.exec(url.hostname);
+  const own = /^([^.]+)-(\d+)\.(.+)$/.exec(self.location.hostname);
+  if (!asked || !own) return null;
+  if (asked[3] !== own[3]) return null;
+  if (asked[1].toLowerCase() !== String(originPod.instanceId).toLowerCase()) {
+    return null;
+  }
+  return Number(asked[2]);
+}
+
+// A sibling is a different origin, so what comes back has to say it may be
+// read by the page that asked. The proxy already marks every response
+// readable across origins; this is the half that CORS asks for by name.
+function withCrossOriginAccess(response, request) {
+  const origin = request.headers.get("origin");
+  if (!origin) return response;
+  const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", origin);
+  headers.set("Access-Control-Allow-Credentials", "true");
+  headers.set("Vary", "Origin");
+  return new Response(response.body, {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
@@ -989,6 +1032,21 @@ self.addEventListener("fetch", (event) => {
         url.pathname + url.search,
         request,
       ),
+    );
+    return;
+  }
+
+  // A sibling port of this same pod, named by its own origin.
+  const siblingPort = siblingPreviewPort(url);
+  if (siblingPort !== null) {
+    event.respondWith(
+      proxyToVirtualServer(
+        request,
+        originPod.instanceId,
+        siblingPort,
+        url.pathname + url.search,
+        request,
+      ).then((response) => withCrossOriginAccess(response, request)),
     );
     return;
   }
