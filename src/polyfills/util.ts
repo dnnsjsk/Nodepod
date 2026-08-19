@@ -579,6 +579,73 @@ interface ParseArgsResult {
   }>;
 }
 
+const ENV_QUOTES = new Set(['"', "'", "`"]);
+
+// util.parseEnv, which reads the dotenv format Node reads: blank lines and
+// # comments are skipped, an optional `export ` prefix is dropped, a quoted
+// value keeps its whitespace and may span lines, an unquoted one is trimmed
+// and ends at a # , and the last assignment to a key wins. Vite calls this to
+// load .env, so without it a project with one cannot be built or served.
+export function parseEnv(content: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  const length = content.length;
+  let at = 0;
+
+  const skipLine = () => {
+    while (at < length && content[at] !== "\n") at += 1;
+  };
+
+  while (at < length) {
+    const char = content[at]!;
+    if (char === "\n" || char === "\r" || char === " " || char === "\t") {
+      at += 1;
+      continue;
+    }
+    if (char === "#") {
+      skipLine();
+      continue;
+    }
+
+    const keyStart = at;
+    while (at < length && content[at] !== "=" && content[at] !== "\n") at += 1;
+    // a line with no assignment on it is not one
+    if (at >= length || content[at] === "\n") {
+      skipLine();
+      continue;
+    }
+    let key = content.slice(keyStart, at).trim();
+    if (key.startsWith("export ")) key = key.slice("export ".length).trim();
+    at += 1;
+
+    while (at < length && (content[at] === " " || content[at] === "\t")) {
+      at += 1;
+    }
+
+    let value: string;
+    const quote = content[at];
+    if (quote !== undefined && ENV_QUOTES.has(quote)) {
+      at += 1;
+      const valueStart = at;
+      while (at < length && content[at] !== quote) at += 1;
+      value = content.slice(valueStart, at);
+      // an unterminated quote takes the rest of the file, as it does in Node
+      if (at < length) at += 1;
+      skipLine();
+    } else {
+      const valueStart = at;
+      while (at < length && content[at] !== "\n" && content[at] !== "#") {
+        at += 1;
+      }
+      value = content.slice(valueStart, at).trim();
+      skipLine();
+    }
+
+    if (key.length > 0) result[key] = value;
+  }
+
+  return result;
+}
+
 export function parseArgs(config?: ParseArgsConfig): ParseArgsResult {
   const args =
     config?.args ??
@@ -761,6 +828,7 @@ export default {
   isPromise,
   styleText,
   parseArgs,
+  parseEnv,
   types,
   TextEncoder,
   TextDecoder,
