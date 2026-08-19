@@ -92,6 +92,7 @@ interface ParseArgsResult {
         index: number;
     }>;
 }
+export declare function parseEnv(content: string): Record<string, string>;
 export declare function parseArgs(config?: ParseArgsConfig): ParseArgsResult;
 export declare const TextEncoder: {
     new (): TextEncoder;
@@ -130,6 +131,7 @@ declare const _default: {
     isPromise: typeof isPromise;
     styleText: typeof styleText;
     parseArgs: typeof parseArgs;
+    parseEnv: typeof parseEnv;
     types: {
         isDate: typeof isDate;
         isRegExp: typeof isRegExp;
