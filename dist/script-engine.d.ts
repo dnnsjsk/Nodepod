@@ -87,3 +87,15 @@ export declare function executeCode(code: string, vol: MemoryVolume, opts?: Engi
 };
 export type { IScriptEngine, ExecutionOutcome, EngineConfig, } from "./engine-types";
 export default ScriptEngine;
+/**
+ * A server inside a pod listens on a port that means nothing to the network,
+ * so a loopback URL naming one has to be answered by the registry that holds
+ * it. `http.request` already does this; `fetch` did not, and the difference
+ * is not cosmetic: a process fetching its own port reached past the pod to
+ * whatever the machine hosting the browser happened to be running there, and
+ * read the answer as its own. Divine renders a page by fetching its dev
+ * server, so a developer with anything on that port saw someone else's
+ * project on the board.
+ */
+export declare function loopbackTarget(url: string): URL | null;
+export declare function dispatchLoopback(target: URL, input: RequestInfo | URL, init?: RequestInit): Promise<Response | null>;
