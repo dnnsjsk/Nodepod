@@ -104,11 +104,11 @@ export function collectEsmCjsPatches(
         if (needsTmp) {
           lines.push(`const ${tmpVar} = require(${JSON.stringify(src)})`);
           lines.push(
-            `const ${defSpec.local.name} = ${tmpVar}.__esModule ? ${tmpVar}.default : ${tmpVar}`,
+            `const ${defSpec.local.name} = ${interopDefault(tmpVar)}`,
           );
         } else if (defSpec) {
           lines.push(
-            `const ${defSpec.local.name} = (function(m) { return m.__esModule ? m.default : m; })(require(${JSON.stringify(src)}))`,
+            `const ${defSpec.local.name} = (function(m) { return ${interopDefault("m")}; })(require(${JSON.stringify(src)}))`,
           );
         }
 
@@ -227,7 +227,7 @@ export function collectEsmCjsPatches(
         for (const spec of node.specifiers) {
           if (spec.local.name === "default") {
             lines.push(
-              `exports.${spec.exported.name} = ${tmp}.__esModule ? ${tmp}.default : ${tmp}`,
+              `exports.${spec.exported.name} = ${interopDefault(tmp)}`,
             );
           } else {
             lines.push(
@@ -286,6 +286,21 @@ function esmToCjsViaAst(code: string, options: ESMToCJSOptions): string {
   for (const [s, e, r] of patches)
     output = output.slice(0, s) + r + output.slice(e);
   return output;
+}
+
+/**
+ * The default binding an ESM file gets from a required module.
+ *
+ * Node hands an ESM file the whole module.exports of a CommonJS module and
+ * never consults __esModule; the flag only says where a module converted
+ * from ESM keeps its own default. A module that sets the flag without
+ * defining `default` is therefore still its exports object, not undefined —
+ * and that is every file Babel compiled from named exports, `@babel/core`
+ * among them, which is what `import babel from "@babel/core"` reads
+ * `.template` off. `expr` is evaluated more than once, so pass an identifier.
+ */
+function interopDefault(expr: string): string {
+  return `(${expr}.__esModule && "default" in ${expr} ? ${expr}.default : ${expr})`;
 }
 
 // extract all bound names from a destructuring pattern or identifier
@@ -534,7 +549,7 @@ function esmToCjsViaRegex(
     (_m, def, named, src) => {
       const tmp = `__import_${def}`;
       const fixed = named.replace(RE_AS_RENAME, "$1: $2");
-      return `const ${tmp} = require("${src}"); const ${def} = ${tmp}.__esModule ? ${tmp}.default : ${tmp}; const {${fixed}} = ${tmp};`;
+      return `const ${tmp} = require("${src}"); const ${def} = ${interopDefault(tmp)}; const {${fixed}} = ${tmp};`;
     },
   );
   out = out.replace(RE_IMPORT_DEFAULT, 'const $1 = require("$2");');
