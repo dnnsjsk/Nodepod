@@ -149,6 +149,16 @@ export declare function _buildClientRequest(first: string | URL | ConnectionOpti
 export type RegistryHook = (port: number, srv: Server) => void;
 export type HttpClientBridge = (port: number, method: string, path: string, headers: Record<string, string>, body?: Buffer) => Promise<CompletedResponse>;
 export declare function getServer(port: number): Server | undefined;
+/**
+ * Answering a request for a port inside the pod, wherever the server that
+ * holds it lives: this process's own registry first, then the process that
+ * owns it. Null means nothing in the pod is listening there, which is the
+ * caller's cue that the network is the right answer after all.
+ *
+ * `request()` has resolved a loopback address this way all along. `fetch`
+ * did not, and reached the machine hosting the browser instead.
+ */
+export declare function serveLoopback(port: number, method: string, path: string, headers: Record<string, string>, body?: Buffer): Promise<CompletedResponse | null>;
 export declare function getAllServers(): Map<number, Server>;
 export declare function closeAllServers(): void;
 export declare function closeServersByPid(pid: number): void;
@@ -207,6 +217,7 @@ declare const _default: {
     STATUS_CODES: Record<number, string>;
     METHODS: string[];
     getServer: typeof getServer;
+    serveLoopback: typeof serveLoopback;
     getAllServers: typeof getAllServers;
     setServerListenCallback: typeof setServerListenCallback;
     setServerCloseCallback: typeof setServerCloseCallback;
