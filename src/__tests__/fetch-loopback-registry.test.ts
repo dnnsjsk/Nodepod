@@ -44,8 +44,8 @@ describe("dispatchLoopback", () => {
     }
   });
 
-  /* Nothing of the pod's is on that port, so the network is the right answer
-     after all and the caller falls through to it. */
+  /* Nothing in the pod is on that port and no other process owns one, so
+     the network is the right answer after all and the caller falls through. */
   it("declines a port the pod is not serving", async () => {
     const target = loopbackTarget("http://localhost:45412/");
     expect(await dispatchLoopback(target as URL, "http://localhost:45412/")).toBeNull();

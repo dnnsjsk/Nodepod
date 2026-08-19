@@ -1431,6 +1431,30 @@ export function getServer(port: number): Server | undefined {
   return _registry.get(port);
 }
 
+/**
+ * Answering a request for a port inside the pod, wherever the server that
+ * holds it lives: this process's own registry first, then the process that
+ * owns it. Null means nothing in the pod is listening there, which is the
+ * caller's cue that the network is the right answer after all.
+ *
+ * `request()` has resolved a loopback address this way all along. `fetch`
+ * did not, and reached the machine hosting the browser instead.
+ */
+export async function serveLoopback(
+  port: number,
+  method: string,
+  path: string,
+  headers: Record<string, string>,
+  body?: Buffer,
+): Promise<CompletedResponse | null> {
+  const local = _registry.get(port);
+  if (local) return await local.dispatchRequest(method, path, headers, body);
+  if (_httpClientBridge) {
+    return await _httpClientBridge(port, method, path, headers, body);
+  }
+  return null;
+}
+
 export function getAllServers(): Map<number, Server> {
   return new Map(_registry);
 }
@@ -1654,6 +1678,7 @@ export default {
   STATUS_CODES,
   METHODS,
   getServer,
+  serveLoopback,
   getAllServers,
   setServerListenCallback,
   setServerCloseCallback,

@@ -3301,10 +3301,6 @@ export async function dispatchLoopback(
   const port =
     Number(target.port) || (target.protocol === "https:" ? 443 : 80);
   const httpMod = await import("./polyfills/http");
-  const server = httpMod.getServer(port);
-  /* Nothing of the pod's is on that port, so the network is the right
-     answer after all. */
-  if (!server) return null;
   const request = new Request(input as RequestInfo, init);
   const headers: Record<string, string> = {};
   request.headers.forEach((value, name) => {
@@ -3315,12 +3311,16 @@ export async function dispatchLoopback(
     request.method === "GET" || request.method === "HEAD"
       ? undefined
       : Buffer.from(await request.arrayBuffer());
-  const result = await server.dispatchRequest(
+  const result = await httpMod.serveLoopback(
+    port,
     request.method,
     `${target.pathname}${target.search}`,
     headers,
     body,
   );
+  /* Nothing of the pod's is on that port, so the network is the right answer
+     after all. */
+  if (result === null) return null;
   /* Copied into a buffer of its own: a body that came back over shared
      memory cannot be handed to Response as it is. */
   let payload: BodyInit;
