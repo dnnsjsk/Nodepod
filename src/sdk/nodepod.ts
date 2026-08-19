@@ -982,9 +982,17 @@ export class Nodepod {
     (this._volume as any).tree = (fresh as any).tree;
     this._volume.rebuildIndexes();
 
-    // Auto-install deps from package.json if requested and manifest exists
+    // Auto-install deps from package.json if requested and manifest exists.
+    // Dev dependencies included: a shallow snapshot drops node_modules on the
+    // promise of reinstalling it, so reinstalling less than was there breaks
+    // that promise. For anything that is worked on rather than only run, the
+    // tooling that makes it work — its bundler, its test runner — is a dev
+    // dependency, and a restored pod without them cannot build what it just
+    // restored.
     if (autoInstall && this._volume.existsSync("/package.json")) {
-      await this._packages.installFromManifest();
+      await this._packages.installFromManifest(undefined, {
+        withDevDeps: true,
+      });
     }
   }
 
