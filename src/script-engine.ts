@@ -2508,9 +2508,9 @@ export class ScriptEngine {
             }
           }
           if (url !== undefined) {
-            const loopback = loopbackTarget(url);
-            if (loopback !== null) {
-              return dispatchLoopback(loopback, input, init).then(
+            const bridged = loopbackTarget(url) ?? sameOriginTarget(url);
+            if (bridged !== null) {
+              return dispatchLoopback(bridged, input, init).then(
                 (answer) => answer ?? origFetch(input, init),
               );
             }
@@ -3293,13 +3293,23 @@ export function loopbackTarget(url: string): URL | null {
   return loopback ? parsed : null;
 }
 
+function sameOriginTarget(url: string): URL | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  if (typeof location === "undefined") return null;
+  return parsed.origin === location.origin ? parsed : null;
+}
+
 export async function dispatchLoopback(
   target: URL,
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response | null> {
-  const port =
-    Number(target.port) || (target.protocol === "https:" ? 443 : 80);
   const httpMod = await import("./polyfills/http");
   const request = new Request(input as RequestInfo, init);
   const headers: Record<string, string> = {};
@@ -3311,13 +3321,7 @@ export async function dispatchLoopback(
     request.method === "GET" || request.method === "HEAD"
       ? undefined
       : Buffer.from(await request.arrayBuffer());
-  const result = await httpMod.serveLoopback(
-    port,
-    request.method,
-    `${target.pathname}${target.search}`,
-    headers,
-    body,
-  );
+  const result = await httpMod.serveHost(target, request.method, headers, body);
   /* Nothing of the pod's is on that port, so the network is the right answer
      after all. */
   if (result === null) return null;

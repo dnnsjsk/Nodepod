@@ -464,7 +464,7 @@ export class ProcessManager extends EventEmitter {
     method: string,
     path: string,
     headers: Record<string, string>,
-    body?: string | null,
+    body?: string | ArrayBuffer | null,
   ): Promise<{ statusCode: number; statusMessage: string; headers: Record<string, string | string[]>; body: string | ArrayBuffer }> {
     const pid = this._serverPorts.get(port);
     if (pid === undefined) {
@@ -529,6 +529,60 @@ export class ProcessManager extends EventEmitter {
     clientHandle: ProcessHandle,
     msg: WorkerToMain_HttpClientRequest,
   ): void {
+    if (!this._serverPorts.has(msg.port)) {
+      if (msg.target !== null) {
+        void fetch(msg.target, {
+          body:
+            msg.body === null || msg.method === "GET" || msg.method === "HEAD"
+              ? undefined
+              : msg.body,
+          headers: msg.headers,
+          method: msg.method,
+        })
+          .then(async (response) => {
+            const body = await response.arrayBuffer();
+            const headers: Record<string, string> = {};
+            response.headers.forEach((value, name) => {
+              headers[name] = value;
+            });
+            clientHandle.postMessage(
+              {
+                type: "http-client-response",
+                requestId: msg.requestId,
+                fallback: false,
+                statusCode: response.status,
+                statusMessage: response.statusText,
+                headers,
+                body,
+              },
+              [body],
+            );
+          })
+          .catch((err) => {
+            const message = err instanceof Error ? err.message : String(err);
+            clientHandle.postMessage({
+              type: "http-client-response",
+              requestId: msg.requestId,
+              fallback: false,
+              statusCode: 502,
+              statusMessage: "Bad Gateway",
+              headers: { "Content-Type": "text/plain" },
+              body: message,
+            });
+          });
+        return;
+      }
+      clientHandle.postMessage({
+        type: "http-client-response",
+        requestId: msg.requestId,
+        fallback: true,
+        statusCode: 0,
+        statusMessage: "",
+        headers: {},
+        body: "",
+      });
+      return;
+    }
     this.dispatchHttpRequest(
       msg.port,
       msg.method,
@@ -549,6 +603,7 @@ export class ProcessManager extends EventEmitter {
           {
             type: "http-client-response",
             requestId: msg.requestId,
+            fallback: false,
             statusCode: resp.statusCode,
             statusMessage: resp.statusMessage,
             headers: resp.headers,
@@ -562,6 +617,7 @@ export class ProcessManager extends EventEmitter {
         clientHandle.postMessage({
           type: "http-client-response",
           requestId: msg.requestId,
+          fallback: false,
           statusCode: 502,
           statusMessage: "Bad Gateway",
           headers: { "Content-Type": "text/plain" },

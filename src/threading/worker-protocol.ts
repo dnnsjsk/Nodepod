@@ -140,12 +140,13 @@ export interface MainToWorker_HttpRequest {
   method: string;
   path: string;
   headers: Record<string, string>;
-  body: string | null;
+  body: string | ArrayBuffer | null;
 }
 
 export interface MainToWorker_HttpClientResponse {
   type: "http-client-response";
   requestId: number;
+  fallback: boolean;
   statusCode: number;
   statusMessage: string;
   headers: Record<string, string | string[]>;
@@ -351,8 +352,9 @@ export interface WorkerToMain_HttpClientRequest {
   port: number;
   method: string;
   path: string;
+  target: string | null;
   headers: Record<string, string>;
-  body: string | null;
+  body: ArrayBuffer | null;
 }
 
 export interface WorkerToMain_CwdChange {

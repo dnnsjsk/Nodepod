@@ -147,7 +147,7 @@ export declare function request(first: string | URL | ConnectionOptions, second?
 export declare function get(first: string | URL | ConnectionOptions, second?: ConnectionOptions | ((r: IncomingMessage) => void), third?: (r: IncomingMessage) => void): ClientRequest;
 export declare function _buildClientRequest(first: string | URL | ConnectionOptions, second: ConnectionOptions | ((r: IncomingMessage) => void) | undefined, third: ((r: IncomingMessage) => void) | undefined, proto: "http" | "https"): ClientRequest;
 export type RegistryHook = (port: number, srv: Server) => void;
-export type HttpClientBridge = (port: number, method: string, path: string, headers: Record<string, string>, body?: Buffer) => Promise<CompletedResponse>;
+export type HttpClientBridge = (port: number, method: string, path: string, headers: Record<string, string>, body?: Buffer, target?: string) => Promise<CompletedResponse | null>;
 export declare function getServer(port: number): Server | undefined;
 /**
  * Answering a request for a port inside the pod, wherever the server that
@@ -159,6 +159,8 @@ export declare function getServer(port: number): Server | undefined;
  * did not, and reached the machine hosting the browser instead.
  */
 export declare function serveLoopback(port: number, method: string, path: string, headers: Record<string, string>, body?: Buffer): Promise<CompletedResponse | null>;
+/** Route a same-origin browser request through the host-side HTTP bridge. */
+export declare function serveHost(target: URL, method: string, headers: Record<string, string>, body?: Buffer): Promise<CompletedResponse | null>;
 export declare function getAllServers(): Map<number, Server>;
 export declare function closeAllServers(): void;
 export declare function closeServersByPid(pid: number): void;
@@ -218,6 +220,7 @@ declare const _default: {
     METHODS: string[];
     getServer: typeof getServer;
     serveLoopback: typeof serveLoopback;
+    serveHost: typeof serveHost;
     getAllServers: typeof getAllServers;
     setServerListenCallback: typeof setServerListenCallback;
     setServerCloseCallback: typeof setServerCloseCallback;

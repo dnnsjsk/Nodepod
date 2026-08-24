@@ -3,6 +3,8 @@ import { Buffer } from "../polyfills/buffer";
 import {
   createServer,
   request,
+  serveHost,
+  serveLoopback,
   setHttpClientBridge,
   type HttpClientBridge,
 } from "../polyfills/http";
@@ -55,5 +57,40 @@ describe("HTTP client bridge (cross-worker localhost)", () => {
 
     remote.close();
     expect(responseText).toBe("proxied-body");
+  });
+
+  it("lets fetch fall through when no process owns the port", async () => {
+    setHttpClientBridge(async () => null);
+
+    await expect(
+      serveLoopback(3000, "GET", "/outside", {}),
+    ).resolves.toBeNull();
+  });
+
+  it("carries a full host target and binary body across the bridge", async () => {
+    const body = Buffer.from([0, 127, 255]);
+    setHttpClientBridge(async (port, method, path, headers, received, target) => {
+      expect(port).toBe(443);
+      expect(method).toBe("POST");
+      expect(path).toBe("/api/git?service=receive");
+      expect(headers.authorization).toBe("Basic secret");
+      expect([...((received as Buffer) ?? [])]).toEqual([0, 127, 255]);
+      expect(target).toBe("https://example.test/api/git?service=receive");
+      return {
+        statusCode: 200,
+        statusMessage: "OK",
+        headers: { "Content-Type": "application/octet-stream" },
+        body,
+      };
+    });
+
+    const response = await serveHost(
+      new URL("https://example.test/api/git?service=receive"),
+      "POST",
+      { authorization: "Basic secret" },
+      body,
+    );
+
+    expect(response?.body).toBe(body);
   });
 });

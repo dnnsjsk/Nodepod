@@ -119,7 +119,7 @@ function installSqliteHostBridge(): void {
 const _httpClientCallbacks = new Map<
   number,
   {
-    resolve: (resp: CompletedResponse) => void;
+    resolve: (resp: CompletedResponse | null) => void;
     reject: (err: Error) => void;
     timer: ReturnType<typeof setTimeout>;
   }
@@ -365,12 +365,12 @@ async function ensureShell(): Promise<typeof import("../polyfills/child_process"
     httpMod.setServerCloseCallback((port: number) => {
       post({ type: "server-close", port });
     });
-    httpMod.setHttpClientBridge((port, method, path, headers, body) =>
+    httpMod.setHttpClientBridge((port, method, path, headers, body, target) =>
       new Promise((resolve, reject) => {
         const requestId = _nextHttpClientId++;
         const timer = setTimeout(() => {
           _httpClientCallbacks.delete(requestId);
-          reject(new Error(`HTTP client request timed out for localhost:${port}${path}`));
+          reject(new Error(`HTTP client request timed out for ${target ?? `localhost:${port}${path}`}`));
         }, 30_000);
         _httpClientCallbacks.set(requestId, {
           resolve: (resp) => {
@@ -383,15 +383,23 @@ async function ensureShell(): Promise<typeof import("../polyfills/child_process"
           },
           timer,
         });
+        let bodyValue: ArrayBuffer | null = null;
+        const transfer: Transferable[] = [];
+        if (body) {
+          bodyValue = new ArrayBuffer(body.byteLength);
+          new Uint8Array(bodyValue).set(body);
+          transfer.push(bodyValue);
+        }
         post({
           type: "http-client-request",
           requestId,
           port,
           method,
           path,
+          target: target ?? null,
           headers,
-          body: body ? body.toString("utf8") : null,
-        });
+          body: bodyValue,
+        }, transfer);
       }),
     );
     _shellInitialized = true;
@@ -708,7 +716,7 @@ async function handleHttpRequest(msg: {
   method: string;
   path: string;
   headers: Record<string, string>;
-  body: string | null;
+  body: string | ArrayBuffer | null;
 }): Promise<void> {
   try {
     const httpMod = await import("../polyfills/http");
@@ -726,7 +734,11 @@ async function handleHttpRequest(msg: {
     }
 
     const { Buffer } = await import("../polyfills/buffer");
-    const bodyBuf = msg.body ? Buffer.from(msg.body) : undefined;
+    const bodyBuf = msg.body
+      ? msg.body instanceof ArrayBuffer
+        ? Buffer.from(new Uint8Array(msg.body))
+        : Buffer.from(msg.body)
+      : undefined;
     const result = await server.dispatchRequest(
       msg.method,
       msg.path,
@@ -776,6 +788,7 @@ async function handleHttpRequest(msg: {
 
 function handleHttpClientResponse(msg: {
   requestId: number;
+  fallback: boolean;
   statusCode: number;
   statusMessage: string;
   headers: Record<string, string | string[]>;
@@ -785,6 +798,10 @@ function handleHttpClientResponse(msg: {
   if (!entry) return;
   _httpClientCallbacks.delete(msg.requestId);
   clearTimeout(entry.timer);
+  if (msg.fallback) {
+    entry.resolve(null);
+    return;
+  }
   void (async () => {
     const { Buffer } = await import("../polyfills/buffer");
     let bodyVal: Buffer | string | null = null;

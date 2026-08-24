@@ -1061,15 +1061,19 @@ ClientRequest.prototype._dispatch = async function _dispatch(): Promise<void> {
             this._opts.path ?? "/",
             this.headers,
             body,
+            endpoint,
           );
           if (this._cancelled || this._timedOut) return;
           this._clearWaitTimer();
-          this._emitMappedResponse(result.statusCode, result.statusMessage, result.headers, result.body);
+          if (result) {
+            this._emitMappedResponse(result.statusCode, result.statusMessage, result.headers, result.body);
+            return;
+          }
         } catch (err) {
           this._clearWaitTimer();
           if (!this._timedOut) this.emit("error", err);
+          return;
         }
-        return;
       }
       this._clearWaitTimer();
       // No virtual server on this port — emit ECONNREFUSED
@@ -1405,7 +1409,8 @@ export type HttpClientBridge = (
   path: string,
   headers: Record<string, string>,
   body?: Buffer,
-) => Promise<CompletedResponse>;
+  target?: string,
+) => Promise<CompletedResponse | null>;
 
 let _httpClientBridge: HttpClientBridge | null = null;
 
@@ -1447,12 +1452,47 @@ export async function serveLoopback(
   headers: Record<string, string>,
   body?: Buffer,
 ): Promise<CompletedResponse | null> {
-  const local = _registry.get(port);
-  if (local) return await local.dispatchRequest(method, path, headers, body);
-  if (_httpClientBridge) {
-    return await _httpClientBridge(port, method, path, headers, body);
+  return await serveHost(
+    new URL(`http://localhost:${port}${path}`),
+    method,
+    headers,
+    body,
+  );
+}
+
+/** Route a same-origin browser request through the host-side HTTP bridge. */
+export async function serveHost(
+  target: URL,
+  method: string,
+  headers: Record<string, string>,
+  body?: Buffer,
+): Promise<CompletedResponse | null> {
+  const hostname = target.hostname.replace(/^\[|\]$/g, "");
+  const loopback =
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "0.0.0.0" ||
+    hostname === "::1" ||
+    hostname === "::";
+  const port = Number(target.port) || (target.protocol === "https:" ? 443 : 80);
+  const local = loopback ? _registry.get(port) : undefined;
+  if (local) {
+    return await local.dispatchRequest(
+      method,
+      `${target.pathname}${target.search}`,
+      headers,
+      body,
+    );
   }
-  return null;
+  if (!_httpClientBridge) return null;
+  return await _httpClientBridge(
+    port,
+    method,
+    `${target.pathname}${target.search}`,
+    headers,
+    body,
+    target.href,
+  );
 }
 
 export function getAllServers(): Map<number, Server> {
@@ -1679,6 +1719,7 @@ export default {
   METHODS,
   getServer,
   serveLoopback,
+  serveHost,
   getAllServers,
   setServerListenCallback,
   setServerCloseCallback,

@@ -52,7 +52,7 @@ export declare class ProcessManager extends EventEmitter {
     registerServerPort(port: number, pid: number): void;
     unregisterServerPort(port: number): void;
     getServerPorts(): number[];
-    dispatchHttpRequest(port: number, method: string, path: string, headers: Record<string, string>, body?: string | null): Promise<{
+    dispatchHttpRequest(port: number, method: string, path: string, headers: Record<string, string>, body?: string | ArrayBuffer | null): Promise<{
         statusCode: number;
         statusMessage: string;
         headers: Record<string, string | string[]>;
