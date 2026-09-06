@@ -88,6 +88,7 @@ export interface MainToWorker_VFSSync {
   path: string;
   content: ArrayBuffer | null; // null = deleted
   isDirectory: boolean;
+  symlinkTarget?: string;
 }
 
 export interface MainToWorker_VFSSnapshot {
@@ -240,6 +241,7 @@ export interface WorkerToMain_VFSWrite {
   path: string;
   content: ArrayBuffer;
   isDirectory: boolean;
+  symlinkTarget?: string;
 }
 
 export interface WorkerToMain_VFSDelete {

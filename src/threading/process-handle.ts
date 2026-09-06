@@ -243,7 +243,7 @@ export class ProcessHandle extends EventEmitter {
           break;
 
         case "vfs-write":
-          this.emit("vfs-write", msg.path, msg.content, msg.isDirectory);
+          this.emit("vfs-write", msg.path, msg.content, msg.isDirectory, msg.symlinkTarget);
           break;
 
         case "vfs-delete":

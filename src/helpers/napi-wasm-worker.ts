@@ -1058,6 +1058,7 @@ const __fsStub = {
   existsSync(p) { try { __fsSyncCall('statSync', [p]); return true; } catch { return false; } },
   statSync(p) { return __makeStatObj(__fsSyncCall('statSync', [p])); },
   lstatSync(p) { return __makeStatObj(__fsSyncCall('lstatSync', [p])); },
+  readlinkSync(p) { return __fsSyncCall('readlinkSync', [p]); },
   readdirSync(p, opts) {
     const result = __fsSyncCall('readdirSync', [p, opts]) || [];
     // When opts.withFileTypes is set the main thread returns flattened Dirent
@@ -1104,6 +1105,7 @@ const __fsStub = {
   },
   stat(p, cb) { try { const r = __fsStub.statSync(p); if (cb) cb(null, r); } catch(e) { if (cb) cb(e); } },
   lstat(p, cb) { try { const r = __fsStub.lstatSync(p); if (cb) cb(null, r); } catch(e) { if (cb) cb(e); } },
+  readlink(p, cb) { try { const r = __fsStub.readlinkSync(p); if (cb) cb(null, r); } catch(e) { if (cb) cb(e); } },
   readdir(p, opts, cb) {
     if (typeof opts === 'function') { cb = opts; opts = undefined; }
     try { const r = __fsStub.readdirSync(p, opts); if (cb) cb(null, r); } catch(e) { if (cb) cb(e); }
@@ -1117,6 +1119,7 @@ const __fsStub = {
     readFile(p, opts) { try { return Promise.resolve(__fsStub.readFileSync(p, opts)); } catch(e) { return Promise.reject(e); } },
     stat(p) { try { return Promise.resolve(__fsStub.statSync(p)); } catch(e) { return Promise.reject(e); } },
     lstat(p) { try { return Promise.resolve(__fsStub.lstatSync(p)); } catch(e) { return Promise.reject(e); } },
+    readlink(p) { try { return Promise.resolve(__fsStub.readlinkSync(p)); } catch(e) { return Promise.reject(e); } },
     readdir(p, opts) { try { return Promise.resolve(__fsStub.readdirSync(p, opts)); } catch(e) { return Promise.reject(e); } },
     access(p) { try { __fsStub.accessSync(p); return Promise.resolve(); } catch(e) { return Promise.reject(e); } },
     writeFile(p, d, opts) { try { __fsStub.writeFileSync(p, d, opts); return Promise.resolve(); } catch(e) { return Promise.reject(e); } },

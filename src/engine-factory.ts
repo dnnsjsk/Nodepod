@@ -92,8 +92,8 @@ class ProcessWorkerAdapter implements IScriptEngine {
     this._vfsBridge = new VFSBridge(vol);
     this._processManager.setVFSBridge(this._vfsBridge);
 
-    this._vfsBridge.setBroadcaster((path, content, isDirectory, excludePid) => {
-      this._processManager.broadcastVFSChange(path, content, isDirectory, excludePid);
+    this._vfsBridge.setBroadcaster((path, content, isDirectory, excludePid, symlinkTarget) => {
+      this._processManager.broadcastVFSChange(path, content, isDirectory, excludePid, symlinkTarget);
     });
   }
 

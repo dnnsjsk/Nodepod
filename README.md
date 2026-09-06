@@ -47,7 +47,7 @@ const nodepod = await Nodepod.boot({ serviceWorker: false });
   and serializable snapshots.
 - **Shell and terminal** — a persistent shell with an optional xterm.js UI.
 - **npm packages** — registry resolution, archive extraction, module transforms,
-  and browser-side caching.
+  browser-side caching, and exact npm v2/v3 lockfile installs with local workspaces.
 - **Processes** — Node.js scripts and shell commands executed in Web Workers.
 - **HTTP servers** — Node-compatible virtual servers reached through
   `request()`, a service-worker preview, or headless loopback ingress.
@@ -55,6 +55,28 @@ const nodepod = await Nodepod.boot({ serviceWorker: false });
   browser, Node.js, and Bun.
 - **Profiling and inspection** — opt-in runtime traces and attached-preview
   diagnostics.
+
+### Locked private workspaces
+
+Applications can keep private packages under a declared npm workspace (for
+example `packages/ui`) and depend on them with `file:packages/ui`. Mount the
+package source, application manifests, and the npm-generated `package-lock.json`
+before running `npm ci`. No private registry is required for these directories.
+
+For v2/v3 lockfiles, `npm ci` consumes the full locked placement graph, including
+hoisted, nested, bundled, and workspace-local dependencies. It checks local
+manifests before removing installed state, verifies HTTPS archives against their
+locked SRI and package identity, and leaves application manifests and lockfiles
+unchanged. It does not re-resolve transitive versions or install undeclared WASI
+companions: browser-compatible optional packages must already be in the lock.
+Unsupported required native packages fail; unsupported optional platform packages
+are omitted. Registry archives without integrity, external local directories, and
+undeclared workspace links are rejected. The older v1 install path is unchanged.
+
+Workspace links retain their identity across installer, build, and preview
+processes, including lean snapshots and WASI filesystem access. Removing a link
+does not remove its target. This enables ordinary bundler symlink resolution and
+shared peer dependencies without copying a private package into a second tree.
 
 ## Framework setup
 

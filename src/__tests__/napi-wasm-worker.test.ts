@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runInNewContext } from "node:vm";
 import { MemoryVolume } from "../memory-volume";
 import {
   buildNapiWorkerBundle,
@@ -12,6 +13,53 @@ import { EventEmitter } from "../polyfills/events";
 afterEach(() => vi.useRealTimers());
 
 describe("napi WASI worker bundle", () => {
+  it("reads workspace symlinks through the actual generated WASI filesystem bridge", async () => {
+    const vol = new MemoryVolume();
+    vol.mkdirSync("/sandbox/packages/ui", { recursive: true });
+    vol.mkdirSync("/sandbox/node_modules/@example", { recursive: true });
+    vol.symlinkSync("../../packages/ui", "/sandbox/node_modules/@example/ui");
+    vol.writeFileSync("/sandbox/packages/ui/package.json", '{"name":"@example/ui"}');
+    vol.writeFileSync("/probe.mjs", `
+      import fs from 'node:fs';
+      import { WASI } from 'node:wasi';
+      const wasi = new WASI({ version: 'preview1', preopens: { '/': '/sandbox' } });
+      const memory = new WebAssembly.Memory({ initial: 1 });
+      wasi.finalizeBindings({ exports: { memory } });
+      const bytes = new Uint8Array(memory.buffer);
+      const source = new TextEncoder().encode('node_modules/@example/ui');
+      bytes.set(source, 64);
+      const errno = wasi.wasiImport.path_readlink(3, 64, source.length, 256, 256, 32);
+      const length = new DataView(memory.buffer).getUint32(32, true);
+      let missing;
+      try { fs.readlinkSync('/sandbox/missing'); } catch (error) { missing = error.code; }
+      globalThis.proof = {
+        errno,
+        target: new TextDecoder().decode(bytes.slice(256, 256 + length)),
+        missing,
+        resolved: fs.realpathSync('/sandbox/node_modules/@example/ui/package.json'),
+        asynchronous: () => fs.promises.readlink('/sandbox/node_modules/@example/ui'),
+      };
+    `);
+    const bundle = buildNapiWorkerBundle("/probe.mjs", vol, () => {
+      throw new Error("The bridge probe imports only node builtins");
+    }, {}).replaceAll("__NODEPOD_THREAD_ID__", "1");
+    const sandbox: Record<string, any> = {
+      TextEncoder, TextDecoder, SharedArrayBuffer, Atomics, WebAssembly,
+      URL, URLSearchParams, console, performance, crypto: globalThis.crypto,
+      queueMicrotask, setTimeout, clearTimeout,
+      postMessage(message: { __fs__?: Parameters<typeof handleFsProxy>[0] }) {
+        if (message.__fs__) handleFsProxy(message.__fs__, vol as any);
+      },
+    };
+    sandbox.self = sandbox;
+    runInNewContext(bundle, sandbox, { timeout: 2_000 });
+    expect(sandbox.proof.errno).toBe(0);
+    expect(sandbox.proof.target).toBe("../../packages/ui");
+    expect(sandbox.proof.missing).toBe("ENOENT");
+    expect(sandbox.proof.resolved).toBe("/sandbox/packages/ui/package.json");
+    expect(await sandbox.proof.asynchronous()).toBe("../../packages/ui");
+  });
+
   it("recognizes generated NAPI-RS workers without naming a package", () => {
     const vol = new MemoryVolume();
     vol.mkdirSync("/node_modules/example", { recursive: true });

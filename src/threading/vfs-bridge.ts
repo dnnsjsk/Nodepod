@@ -5,12 +5,13 @@ import type { MemoryVolume } from "../memory-volume";
 import { isInternalVfsPath } from "../constants/internal-vfs-paths";
 import type { VFSBinarySnapshot, VFSSnapshotEntry } from "./worker-protocol";
 import type { SharedVFSController } from "./shared-vfs";
+import { applyVFSChange, readVFSChange } from "./vfs-change";
 
 const VFS_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
 
 export class VFSBridge {
   private _volume: MemoryVolume;
-  private _broadcaster: ((path: string, content: ArrayBuffer | null, isDirectory: boolean, excludePid: number) => void) | null = null;
+  private _broadcaster: ((path: string, content: ArrayBuffer | null, isDirectory: boolean, excludePid: number, symlinkTarget?: string) => void) | null = null;
   private _sharedVFS: SharedVFSController | null = null;
   // suppressed during handleWorkerWrite/Mkdir/Delete to prevent double-broadcasting
   private _suppressWatch = false;
@@ -20,7 +21,7 @@ export class VFSBridge {
     this._volume = volume;
   }
 
-  setBroadcaster(fn: (path: string, content: ArrayBuffer | null, isDirectory: boolean, excludePid: number) => void): void {
+  setBroadcaster(fn: (path: string, content: ArrayBuffer | null, isDirectory: boolean, excludePid: number, symlinkTarget?: string) => void): void {
     this._broadcaster = fn;
   }
 
@@ -175,6 +176,15 @@ export class VFSBridge {
     }
   }
 
+  handleWorkerSymlink(path: string, symlinkTarget: string): void {
+    this._suppressWatch = true;
+    try {
+      applyVFSChange(this._volume, { path, symlinkTarget, content: new ArrayBuffer(0), isDirectory: false });
+      // The SAB byte cache cannot represent links. Canonical/lazy reads retain them.
+      this._sharedVFS?.deleteFile(path);
+    } finally { this._suppressWatch = false; }
+  }
+
   // writeFile returns false on table/data exhaustion — silent drops mean
   // workers stop seeing updates, so surface it once per session
   private _sharedVFSWrite(path: string, content: Uint8Array): void {
@@ -218,16 +228,7 @@ export class VFSBridge {
     this._suppressWatch = true;
     try {
       try {
-        if (this._volume.existsSync(path)) {
-          const stat = this._volume.statSync(path);
-          if (stat.isDirectory()) {
-            // recursive delete matching Node's fs.rmSync({ recursive: true })
-            // workers may emit vfs-delete out of order (a rename's "from" fires before descendants are cleaned) or skip intermediate subdirs entirely — if the dir is still on main when a delete arrives, nuke it and everything under it
-            this._rmTree(path);
-          } else {
-            this._volume.unlinkSync(path);
-          }
-        }
+        applyVFSChange(this._volume, { path, content: null, isDirectory: false });
       } catch (e) {
         console.warn(`[VFSBridge] Failed to delete "${path}":`, e);
       }
@@ -239,39 +240,10 @@ export class VFSBridge {
     }
   }
 
-  // recursively remove a directory tree, mirroring fs.rmSync({ recursive: true })
-  private _rmTree(path: string): void {
-    let entries: string[] = [];
-    try {
-      entries = this._volume.readdirSync(path);
-    } catch {
-      // path already gone, or not a directory
-    }
-    for (const name of entries) {
-      const child = path.endsWith("/") ? path + name : path + "/" + name;
-      try {
-        const childStat = this._volume.statSync(child);
-        if (childStat.isDirectory()) {
-          this._rmTree(child);
-        } else {
-          this._volume.unlinkSync(child);
-        }
-      } catch {
-        // ignore per-entry errors, still try to remove the parent
-      }
-    }
-    try {
-      this._volume.rmdirSync(path);
-    } catch (e) {
-      // only re-throw if the directory is still there, otherwise it's a benign race
-      if (this._volume.existsSync(path)) throw e;
-    }
-  }
-
-  broadcastChange(path: string, content: ArrayBuffer | null, isDirectory: boolean, excludePid: number): void {
+  broadcastChange(path: string, content: ArrayBuffer | null, isDirectory: boolean, excludePid: number, symlinkTarget?: string): void {
     if (isInternalVfsPath(path)) return;
     if (this._broadcaster) {
-      this._broadcaster(path, content, isDirectory, excludePid);
+      this._broadcaster(path, content, isDirectory, excludePid, symlinkTarget);
     }
   }
 
@@ -287,22 +259,12 @@ export class VFSBridge {
       if (isInternalVfsPath(absPath)) return;
 
       try {
-        if (this._volume.existsSync(absPath)) {
-          const stat = this._volume.statSync(absPath);
-          if (stat.isDirectory()) {
-            this.broadcastChange(absPath, new ArrayBuffer(0), true, -1);
-            if (this._sharedVFS) this._sharedVFSWriteDirectory(absPath);
-          } else {
-            const data = this._volume.readFileSync(absPath);
-            // fresh ArrayBuffer copy — VFS nodes may store SAB-backed Uint8Arrays when written from WASM threads, and SAB isn't transferable via postMessage
-            const buffer = new ArrayBuffer(data.byteLength);
-            new Uint8Array(buffer).set(data);
-            this.broadcastChange(absPath, buffer, false, -1);
-            if (this._sharedVFS) this._sharedVFSWrite(absPath, data);
-          }
-        } else {
-          this.broadcastChange(absPath, null, false, -1);
-          if (this._sharedVFS) this._sharedVFS.deleteFile(absPath);
+        const change = readVFSChange(this._volume, absPath);
+        this.broadcastChange(change.path, change.content, change.isDirectory, -1, change.symlinkTarget);
+        if (this._sharedVFS) {
+          if (change.content === null || change.symlinkTarget !== undefined) this._sharedVFS.deleteFile(absPath);
+          else if (change.isDirectory) this._sharedVFSWriteDirectory(absPath);
+          else this._sharedVFSWrite(absPath, new Uint8Array(change.content));
         }
       } catch (e) {
         console.warn(`[VFSBridge] Watch error for "${absPath}":`, e);
@@ -316,6 +278,7 @@ export class VFSBridge {
     dir: string,
     visitor: (path: string, isDirectory: boolean, content: Uint8Array | null, metadata?: Partial<VFSSnapshotEntry>) => void,
     excludeDirNames?: Set<string> | null,
+    linksOnly = false,
   ): void {
     try {
       const entries = this._volume.readdirSync(dir);
@@ -328,7 +291,7 @@ export class VFSBridge {
             visitor(fullPath, false, null, { symlinkTarget: this._volume.readlinkSync(fullPath) });
             continue;
           }
-          const stat = this._volume.statSync(fullPath);
+          const stat = lstat;
           const metadata = {
             inode: stat.ino,
             mode: stat.mode,
@@ -338,11 +301,11 @@ export class VFSBridge {
             nlink: stat.nlink,
           };
           if (stat.isDirectory()) {
-            visitor(fullPath, true, null, metadata);
-            // record the dir itself but don't descend — worker fetches lazily
-            if (excludeDirNames?.has(name)) continue;
-            this._walkVolume(fullPath, visitor, excludeDirNames);
-          } else {
+            if (!linksOnly) visitor(fullPath, true, null, metadata);
+            // Lazy snapshots omit package bytes, not link identity. Following a
+            // link must resolve to the workspace and its shared dependency tree.
+            this._walkVolume(fullPath, visitor, excludeDirNames, linksOnly || !!excludeDirNames?.has(name));
+          } else if (!linksOnly) {
             const content = this._volume.readFileSync(fullPath);
             visitor(fullPath, false, content, metadata);
           }

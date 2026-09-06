@@ -181,4 +181,28 @@ describe("node headless host", () => {
     expect(pod.port(5173)).toBeNull();
     pod.teardown();
   }, 60_000);
+
+  it.each(["full", "lean"] as const)("keeps npm ci workspace links across %s processes and reinstall", async (spawnSnapshot) => {
+    setRuntimeHost(createNodeHost({ workerPath, httpHost: "127.0.0.1", httpPort: 0 }));
+    const manifest = { name: "locked-workspace", version: "1.0.0", workspaces: ["packages/*"], dependencies: { "@example/ui": "file:packages/ui" } };
+    const kit = { name: "@example/ui", version: "0.0.0", main: "index.js", private: true };
+    const lock = JSON.stringify({ lockfileVersion: 3, packages: {
+      "": manifest, "packages/ui": kit, "node_modules/@example/ui": { link: true, resolved: "packages/ui" },
+    } });
+    const pod = await Nodepod.boot({ workdir: "/app", spawnSnapshot, packageStore: "memory", enableSnapshotCache: false, files: {
+      "/app/package.json": JSON.stringify(manifest), "/app/package-lock.json": lock,
+      "/app/packages/ui/package.json": JSON.stringify(kit), "/app/packages/ui/index.js": "module.exports = 42",
+      "/app/check.cjs": 'const fs=require("node:fs");console.log(require("@example/ui"),fs.readlinkSync("/app/node_modules/@example/ui"));',
+    } });
+    try {
+      for (let iteration = 0; iteration < 2; iteration++) {
+        const install = await (await pod.spawn("npm", ["ci"], { cwd: "/app" })).completion;
+        expect(install.exitCode, install.stderr).toBe(0);
+        expect(await pod.fs.readFile("/app/package-lock.json", "utf8")).toBe(lock);
+        const result = await (await pod.spawn("node", ["check.cjs"], { cwd: "/app" })).completion;
+        expect(result.exitCode, result.stderr).toBe(0);
+        expect(result.stdout.trim()).toBe("42 /app/packages/ui");
+      }
+    } finally { pod.teardown(); }
+  }, 60_000);
 });

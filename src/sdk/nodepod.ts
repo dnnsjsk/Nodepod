@@ -196,12 +196,13 @@ export class Nodepod {
     this._processManager = new ProcessManager(volume, performanceTracker, this._instrumentationProfiler);
     this._vfsBridge = new VFSBridge(volume);
 
-    this._vfsBridge.setBroadcaster((path, content, isDirectory, excludePid) => {
+    this._vfsBridge.setBroadcaster((path, content, isDirectory, excludePid, symlinkTarget) => {
       this._processManager.broadcastVFSChange(
         path,
         content,
         isDirectory,
         excludePid,
+        symlinkTarget,
       );
     });
 

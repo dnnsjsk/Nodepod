@@ -89,5 +89,5 @@ export declare class ProcessManager extends EventEmitter {
     private _handleSqlitePreload;
     private _createEmptySnapshot;
     private static readonly VFS_BROADCAST_MAX_BYTES;
-    broadcastVFSChange(path: string, content: ArrayBuffer | null, isDirectory: boolean, excludePid: number): void;
+    broadcastVFSChange(path: string, content: ArrayBuffer | null, isDirectory: boolean, excludePid: number, symlinkTarget?: string): void;
 }

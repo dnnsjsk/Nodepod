@@ -22,6 +22,7 @@ installFetchHeadersSetCookieParity();
 installNodeFetchClassParity();
 import { SyncChannelWorker } from "./sync-channel";
 import { createLazyFsClient } from "./lazy-fs-client";
+import { applyVFSChange, readVFSChange, type VFSChange } from "./vfs-change";
 import type {
   MainToWorkerMessage,
   MainToWorker_Init,
@@ -294,25 +295,11 @@ async function handleInit(msg: MainToWorker_Init): Promise<void> {
   _volume.watch("/", { recursive: true }, (event, filename) => {
     if (!filename || _suppressVFSWatch || isInternalVfsPath(filename)) return;
     try {
-      if (_volume!.existsSync(filename)) {
-        const stat = _volume!.statSync(filename);
-        if (stat.isDirectory()) {
-          post({
-            type: "vfs-write",
-            path: filename,
-            content: new ArrayBuffer(0),
-            isDirectory: true,
-          });
-        } else {
-          const data = _volume!.readFileSync(filename);
-          // must copy into a fresh ArrayBuffer — if the Uint8Array is backed by SAB (e.g. esbuild-wasm or any napi-rs wasm32-wasip1-threads module writing from shared memory), both .buffer.slice() and .slice() return SAB, which isn't transferable
-          // postMessage would throw DataCloneError, the catch swallows it, main-thread VFS never learns about the write — this was what caused Vite dep-optimizer 504s (.vite/deps/*.js missing) and downstream 404s
-          const buffer = new ArrayBuffer(data.byteLength);
-          new Uint8Array(buffer).set(data);
-          post({ type: "vfs-write", path: filename, content: buffer, isDirectory: false }, [buffer]);
-        }
+      const change = readVFSChange(_volume!, filename);
+      if (change.content !== null) {
+        post({ ...change, content: change.content, type: "vfs-write" }, [change.content]);
       } else {
-        post({ type: "vfs-delete", path: filename });
+        post({ type: "vfs-delete", path: change.path });
       }
     } catch {
       /* ignore */
@@ -645,33 +632,12 @@ function handleSignal(msg: { signal: string }): void {
   }
 }
 
-function handleVFSSync(msg: { path: string; content: ArrayBuffer | null; isDirectory: boolean }): void {
+function handleVFSSync(msg: VFSChange): void {
   if (!_volume) return;
   // suppress watcher — these came from another worker, don't echo back
   _suppressVFSWatch = true;
   try {
-    if (msg.content === null) {
-      if (_volume.existsSync(msg.path)) {
-        const stat = _volume.statSync(msg.path);
-        if (stat.isDirectory()) {
-          // recursive — match main-thread VFSBridge._rmTree; non-recursive
-          // rmdirSync fails (swallowed) and leaves peer dirs stale
-          _volume.removeTreeSync(msg.path);
-        } else {
-          _volume.unlinkSync(msg.path);
-        }
-      }
-    } else if (msg.isDirectory) {
-      if (!_volume.existsSync(msg.path)) {
-        _volume.mkdirSync(msg.path, { recursive: true });
-      }
-    } else {
-      const parentDir = msg.path.substring(0, msg.path.lastIndexOf("/")) || "/";
-      if (parentDir !== "/" && !_volume.existsSync(parentDir)) {
-        _volume.mkdirSync(parentDir, { recursive: true });
-      }
-      _volume.writeFileSync(msg.path, new Uint8Array(msg.content));
-    }
+    applyVFSChange(_volume, msg);
   } catch {
     /* ignore */
   } finally {

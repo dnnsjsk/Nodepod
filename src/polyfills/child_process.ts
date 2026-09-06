@@ -1131,7 +1131,8 @@ async function npmCi(
   pm: PkgManager = "npm",
 ): Promise<ShellResult> {
   const lock = readPackageLock(_vol!, ctx.cwd);
-  if (!lock || lock.packages.length === 0) {
+  const completeLock = lock?.lockfileVersion === 2 || lock?.lockfileVersion === 3;
+  if (!lock || (!completeLock && lock.packages.length === 0)) {
     return {
       stdout: "",
       stderr: formatErr(
@@ -1141,7 +1142,7 @@ async function npmCi(
       exitCode: 1,
     };
   }
-  const match = packageJsonDepsMatchLock(_vol!, ctx.cwd, lock.packages);
+  const match = completeLock ? { ok: true as const } : packageJsonDepsMatchLock(_vol!, ctx.cwd, lock.packages);
   if (!match.ok) {
     return {
       stdout: "",
@@ -1152,7 +1153,7 @@ async function npmCi(
 
   try {
     const nm = `${ctx.cwd}/node_modules`.replace(/\/+/g, "/");
-    if (_vol!.existsSync(nm)) removeDir(_vol!, nm);
+    if (!completeLock && _vol!.existsSync(nm)) removeDir(_vol!, nm);
   } catch {
     /* */
   }
@@ -1171,7 +1172,15 @@ async function npmCi(
 
   try {
     let totalAdded = 0;
-    for (const pkg of lock.packages) {
+    if (completeLock) {
+      const ir = await installer.installFromLockfile({
+        onProgress: (m) => {
+          out += m + "\n";
+          spinner.update(formatProgress(m, pm));
+        },
+      });
+      totalAdded += ir.newPackages.length;
+    } else for (const pkg of lock.packages) {
       const ir = await installer.install(pkg.name, pkg.version, {
         persist: false,
         registry: registryUrl,

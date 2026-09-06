@@ -70,6 +70,8 @@ export declare class DependencyInstaller {
      * installed in the package that consumes them.
      */
     installWorkspace(rootManifestPath?: string, flags?: InstallFlags): Promise<WorkspaceInstallOutcome>;
+    /** npm ci: exact locked placements and local workspace links, without resolution. */
+    installFromLockfile(flags?: InstallFlags): Promise<InstallOutcome>;
     listInstalled(): Record<string, string>;
     /**
      * Materialize the resolved tree, then add any WASI companions referenced by

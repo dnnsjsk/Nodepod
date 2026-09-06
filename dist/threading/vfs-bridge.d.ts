@@ -8,7 +8,7 @@ export declare class VFSBridge {
     private _suppressWatch;
     private _warnedSharedVFSDrop;
     constructor(volume: MemoryVolume);
-    setBroadcaster(fn: (path: string, content: ArrayBuffer | null, isDirectory: boolean, excludePid: number) => void): void;
+    setBroadcaster(fn: (path: string, content: ArrayBuffer | null, isDirectory: boolean, excludePid: number, symlinkTarget?: string) => void): void;
     setSharedVFS(controller: SharedVFSController, hydrate?: boolean): void;
     clearSharedVFS(): void;
     private _hydrateSharedVFS;
@@ -23,13 +23,13 @@ export declare class VFSBridge {
     }[];
     handleWorkerWrite(path: string, content: Uint8Array): void;
     handleWorkerSnapshot(snapshot: VFSBinarySnapshot): void;
+    handleWorkerSymlink(path: string, symlinkTarget: string): void;
     private _sharedVFSWrite;
     private _sharedVFSWriteDirectory;
     private _warnSharedVFSDrop;
     handleWorkerMkdir(path: string): void;
     handleWorkerDelete(path: string): void;
-    private _rmTree;
-    broadcastChange(path: string, content: ArrayBuffer | null, isDirectory: boolean, excludePid: number): void;
+    broadcastChange(path: string, content: ArrayBuffer | null, isDirectory: boolean, excludePid: number, symlinkTarget?: string): void;
     watch(): () => void;
     private _walkVolume;
 }

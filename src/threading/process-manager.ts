@@ -866,15 +866,17 @@ export class ProcessManager extends EventEmitter {
       }, 100);
     });
 
-    handle.on("vfs-write", (path: string, content: ArrayBuffer, isDirectory: boolean) => {
+    handle.on("vfs-write", (path: string, content: ArrayBuffer, isDirectory: boolean, symlinkTarget?: string) => {
       if (this._vfsBridge) {
-        if (isDirectory) {
+        if (symlinkTarget !== undefined) {
+          this._vfsBridge.handleWorkerSymlink(path, symlinkTarget);
+        } else if (isDirectory) {
           this._vfsBridge.handleWorkerMkdir(path);
         } else {
           this._vfsBridge.handleWorkerWrite(path, new Uint8Array(content));
         }
         if (!isInternalVfsPath(path)) {
-          this._vfsBridge.broadcastChange(path, content, isDirectory, handle.pid);
+          this._vfsBridge.broadcastChange(path, content, isDirectory, handle.pid, symlinkTarget);
         }
       }
     });
@@ -1674,7 +1676,7 @@ export class ProcessManager extends EventEmitter {
   // path can become the norm for all sizes (pure pull model, no byte traffic).
   private static readonly VFS_BROADCAST_MAX_BYTES = 4 * 1024 * 1024;
 
-  broadcastVFSChange(path: string, content: ArrayBuffer | null, isDirectory: boolean, excludePid: number): void {
+  broadcastVFSChange(path: string, content: ArrayBuffer | null, isDirectory: boolean, excludePid: number, symlinkTarget?: string): void {
     // build the outgoing payload once — postMessage without a transfer list
     // structured-clones per recipient, so no explicit per-recipient copy is
     // needed on the main thread. copy only if the source is SAB-backed
@@ -1708,6 +1710,7 @@ export class ProcessManager extends EventEmitter {
             path,
             content: payload,
             isDirectory,
+            symlinkTarget,
           });
         }
       } catch {

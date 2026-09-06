@@ -25,6 +25,7 @@ import type { PerformanceTracker } from "../performance-tracker";
 import type { NodepodProfilerImpl, ProfileSpanToken } from "../profiling/profiler";
 import { resolveWithCache } from "./resolution-cache";
 import { writeNpmPackageLock } from "./pm-cli";
+import { readNpmLockPlan } from "./package-lock";
 import {
   discoverWorkspaces,
   workspaceDependencyNames,
@@ -558,6 +559,46 @@ export class DependencyInstaller {
     return { graph, installs };
   }
 
+  /** npm ci: exact locked placements and local workspace links, without resolution. */
+  async installFromLockfile(flags: InstallFlags = {}): Promise<InstallOutcome> {
+    const plan = readNpmLockPlan(this.vol, this.workingDir);
+    // Parse and validate every local manifest/path before removing installed state.
+    for (const group of plan.groups) {
+      const modules = path.join(group.root, "node_modules");
+      if (!this.vol.existsSync(modules)) continue;
+      if (this.vol.lstatSync(modules).isSymbolicLink()) this.vol.unlinkSync(modules);
+      else this.vol.removeTreeSync(modules);
+    }
+    const resolved = new Map<string, ResolvedDependency>();
+    const newPackages: string[] = [];
+    for (const group of plan.groups) {
+      const installer = new DependencyInstaller(this.vol, { cwd: group.root });
+      const installed = await installer.materializePackages(group.tree, flags, true);
+      for (const [name, dependency] of group.tree) {
+        const manifestPath = path.join(group.root, "node_modules", name, "package.json");
+        const actual = JSON.parse(this.vol.readFileSync(manifestPath, "utf8"));
+        if (actual.name !== dependency.fetchName || actual.version !== dependency.version) {
+          throw new Error(`Locked archive identity mismatch for ${name}`);
+        }
+      }
+      for (const [name, dependency] of group.tree) resolved.set(path.join(group.root, "node_modules", name), dependency);
+      newPackages.push(...installed.map(name => path.join(group.root, "node_modules", name)));
+    }
+    for (const embedded of plan.bundled) {
+      const actual = JSON.parse(this.vol.readFileSync(path.join(embedded.directory, "package.json"), "utf8"));
+      if (actual.name !== embedded.name || actual.version !== embedded.version) {
+        throw new Error(`Bundled archive identity mismatch for ${embedded.name}`);
+      }
+      this.createBinStubs(path.dirname(embedded.directory), embedded.name, embedded.directory);
+    }
+    for (const link of plan.links) {
+      this.vol.mkdirSync(path.dirname(link.destination), { recursive: true });
+      this.vol.symlinkSync(link.target, link.destination, "dir");
+    }
+    flags.onProgress?.(`Installed ${newPackages.length} locked package(s) and ${plan.links.length} workspace link(s)`);
+    return { resolved, newPackages };
+  }
+
   listInstalled(): Record<string, string> {
     const nmDir = path.join(this.workingDir, "node_modules");
     if (!this.vol.existsSync(nmDir)) return {};
@@ -771,6 +812,7 @@ export class DependencyInstaller {
   private async materializePackages(
     tree: Map<string, ResolvedDependency>,
     flags: InstallFlags,
+    preservePackageLock = false,
   ): Promise<string[]> {
     const { onProgress } = flags;
     const additions: string[] = [];
@@ -896,7 +938,7 @@ export class DependencyInstaller {
       throw new Error(`Installation incomplete: missing ${incomplete.join(", ")}`);
     }
 
-    this.writeLockFile(tree);
+    this.writeLockFile(tree, preservePackageLock);
 
     // keep the tarball cache under its byte/age budget (fire and forget)
     if (additions.length > 0) {
@@ -938,7 +980,7 @@ export class DependencyInstaller {
     }
   }
 
-  private writeLockFile(tree: Map<string, ResolvedDependency>): void {
+  private writeLockFile(tree: Map<string, ResolvedDependency>, preservePackageLock = false): void {
     const entries: Record<string, { version: string; resolved: string }> = {};
 
     for (const [depName, dep] of tree) {
@@ -957,6 +999,8 @@ export class DependencyInstaller {
       recursive: true,
     });
     this.vol.writeFileSync(lockPath, JSON.stringify(entries, null, 2));
+
+    if (preservePackageLock) return;
 
     let rootPkg: { name?: string; version?: string } | undefined;
     try {
